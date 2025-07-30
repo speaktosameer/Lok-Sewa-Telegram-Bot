@@ -26,12 +26,14 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 # --- /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    supabase.table("users").upsert({
+
+    # Perform upsert using REST
+    supabase_upsert("users", {
         "telegram_id": user.id,
         "full_name": user.full_name,
         "username": user.username
-    }).execute()
-    
+    })
+
     await update.message.reply_text(
         f"👋 Hello {user.first_name}, welcome to *Lok Sewa Preparation Bot 🇳🇵*!\n\n"
         "Use:\n/quiz – Practice MCQs\n/syllabus – Track syllabus\n/leaderboard – View top scorers\n"

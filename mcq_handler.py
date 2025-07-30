@@ -1,3 +1,5 @@
+# mcq_handler.py
+
 from supabase_client import supabase
 import random
 
@@ -9,4 +11,11 @@ def get_random_mcq(subject):
     return random.choice(data)
 
 def format_mcq(mcq):
-    return f"📘 *{mcq['subject']}*\n\n❓ {mcq['question']}\n\nA. {mcq['option_a']}\nB. {mcq['option_b']}\nC. {mcq['option_c']}\nD. {mcq['option_d']}"
+    return (
+        f"📘 *{mcq['subject']}*\n\n"
+        f"❓ *{mcq['question']}*\n\n"
+        f"A. {mcq['option_a']}\n"
+        f"B. {mcq['option_b']}\n"
+        f"C. {mcq['option_c']}\n"
+        f"D. {mcq['option_d']}"
+    )

@@ -1,7 +1,13 @@
 import os
 from dotenv import load_dotenv
 from datetime import datetime, date
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -9,7 +15,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
     ContextTypes,
-    ConversationHandler,
+    ConversationHandler
 )
 from supabase_client import supabase
 from mcq_handler import get_random_mcq, format_mcq
@@ -28,7 +34,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         f"👋 Hello {user.first_name}, welcome to *Lok Sewa Preparation Bot 🇳🇵*!\n\n"
-        "Use:\n/quiz – Practice MCQs\n/syllabus – Track syllabus\n/leaderboard – View top scorers",
+        "Use:\n/quiz – Practice MCQs\n/syllabus – Track syllabus\n/leaderboard – View top scorers\n"
+        "/badges – View achievements\n/exams – Upcoming exams\n/remindme – Daily countdown alerts",
         parse_mode="Markdown"
     )
 
@@ -38,10 +45,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/start – Start bot\n"
         "/quiz – Practice questions\n"
         "/syllabus – View & track topics\n"
-        "/leaderboard – Top users"
+        "/leaderboard – Top users\n"
+        "/badges – View earned achievements\n"
+        "/exams – Upcoming exam countdown\n"
+        "/remindme – Set daily reminder"
     )
 
-# --- /quiz: subject selector
+# --- /quiz
 async def quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_keyboard = [["GK", "Computer"], ["English", "Math"]]
     await update.message.reply_text(
@@ -50,7 +60,6 @@ async def quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return "CHOOSE_SUBJECT"
 
-# --- handle subject → send MCQ
 async def handle_subject(update: Update, context: ContextTypes.DEFAULT_TYPE):
     subject = update.message.text
     mcq = get_random_mcq(subject)
@@ -65,48 +74,52 @@ async def handle_subject(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("D", callback_data=f"D|{mcq['id']}")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
     await update.message.reply_markdown(format_mcq(mcq), reply_markup=reply_markup)
     return ConversationHandler.END
 
-# --- handle answer logic + streak + score
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     answer, mcq_id = query.data.split("|")
     mcq = supabase.table("mcqs").select("*").eq("id", mcq_id).single().execute().data
     correct = mcq["correct_option"]
     explanation = mcq.get("explanation", "No explanation provided.")
-
     user_id = query.from_user.id
     today = date.today()
     user_data = supabase.table("users").select("*").eq("telegram_id", user_id).single().execute().data
-
-    # streak logic
     last_answered = user_data.get("last_answered")
     streak = user_data.get("streak", 0)
-    if last_answered:
-        last_date = datetime.strptime(last_answered, "%Y-%m-%d").date()
-    else:
-        last_date = None
-
+    last_date = datetime.strptime(last_answered, "%Y-%m-%d").date() if last_answered else None
     if last_date == today:
         pass
     elif last_date == today.fromordinal(today.toordinal() - 1):
         streak += 1
     else:
         streak = 1
-
     bonus = 1 if streak >= 5 else 0
     total_points = 1 + bonus
-
     if answer == correct:
         supabase.table("users").update({
             "score": user_data["score"] + total_points,
             "streak": streak,
             "last_answered": str(today)
         }).eq("telegram_id", user_id).execute()
+
+        # Badge unlock
+        existing = supabase.table("user_badges").select("badge_id").eq("telegram_id", user_id).execute().data
+        existing_ids = {b['badge_id'] for b in existing}
+        badges = supabase.table("badges").select("*").lte("streak_day", streak).execute().data
+        new_badges = []
+        for badge in badges:
+            if badge["id"] not in existing_ids:
+                supabase.table("user_badges").insert({
+                    "telegram_id": user_id,
+                    "badge_id": badge["id"]
+                }).execute()
+                new_badges.append(f"{badge['emoji']} *{badge['name']}* – {badge['description']}")
+        if new_badges:
+            await query.message.reply_markdown("🎉 *New Badge Unlocked!*\n\n" + "\n".join(new_badges))
+
         await query.edit_message_text(f"✅ Correct! (+{total_points} pts)\n🔥 Streak: {streak} days\n\n🧠 {explanation}")
     else:
         await query.edit_message_text(f"❌ Wrong! Correct: {correct}\n\n🧠 {explanation}")
@@ -117,90 +130,93 @@ async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not data:
         await update.message.reply_text("🏆 No leaderboard data yet.")
         return
-    
-    msg = "🏆 *Top 10 Learners This Week:*\n\n"
+    msg = "🏆 *Top 10 Learners:*\n\n"
     for i, user in enumerate(data, 1):
         msg += f"{i}. {user['full_name']} — {user['score']} pts\n"
     await update.message.reply_markdown(msg)
 
-# --- /syllabus
-async def syllabus(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reply_keyboard = [["GK", "Computer"], ["English", "Math"]]
-    await update.message.reply_text(
-        "📘 Choose subject to view syllabus:",
-        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True, resize_keyboard=True)
-    )
-    return "CHOOSE_SYLLABUS_SUBJECT"
-
-# --- show topics
-async def show_topics(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    subject = update.message.text
+# --- /badges
+async def my_badges(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    topic_data = supabase.table("topics").select("*").eq("subject", subject).execute().data
-    user_completed = supabase.table("user_topics").select("topic_id").eq("telegram_id", user_id).execute().data
-    completed_ids = {row['topic_id'] for row in user_completed}
+    user_badges = supabase.table("user_badges").select("badge_id").eq("telegram_id", user_id).execute().data
+    badge_ids = [b['badge_id'] for b in user_badges]
+    if not badge_ids:
+        await update.message.reply_text("😢 You haven’t earned any badges yet.")
+        return
+    badges = supabase.table("badges").select("*").in_("id", badge_ids).execute().data
+    msg = "🏅 *Your Achievements:*\n\n"
+    for badge in badges:
+        msg += f"{badge['emoji']} *{badge['name']}* – {badge['description']}\n"
+    await update.message.reply_markdown(msg)
 
-    buttons = []
-    for topic in topic_data:
-        check = "✅" if topic["id"] in completed_ids else "⬜️"
-        buttons.append([KeyboardButton(f"{check} {topic['topic_name']}")])
+# --- /exams
+async def exams(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    today = date.today()
+    data = supabase.table("exams").select("*").gte("exam_date", str(today)).order("exam_date").execute().data
+    if not data:
+        await update.message.reply_text("🎯 No upcoming exams found.")
+        return
+    msg = "📅 *Upcoming Lok Sewa Exams:*\n\n"
+    for exam in data:
+        exam_day = datetime.strptime(exam['exam_date'], "%Y-%m-%d").date()
+        days_left = (exam_day - today).days
+        msg += f"📌 *{exam['name']}*\n🗓 {exam_day.strftime('%B %d, %Y')} – In {days_left} days\n📝 {exam['description']}\n\n"
+    await update.message.reply_markdown(msg)
 
-    context.user_data["syllabus_subject"] = subject
-    context.user_data["topic_data"] = {t['topic_name']: t['id'] for t in topic_data}
-
+# --- /remindme
+async def remindme(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [["Morning (8AM)", "Evening (6PM)"]]
     await update.message.reply_text(
-        f"📖 *{subject} Syllabus:*\nTap a topic to mark as complete ✅",
-        reply_markup=ReplyKeyboardMarkup(buttons, one_time_keyboard=True, resize_keyboard=True),
-        parse_mode="Markdown"
+        "⏰ When would you like to receive daily exam reminders?",
+        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
     )
-    return "MARK_TOPIC"
+    return "SET_REMINDER_TIME"
 
-# --- mark topic complete
-async def mark_topic_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def save_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    choice = update.message.text
     user_id = update.effective_user.id
-    full_text = update.message.text
-    topic_name = full_text.replace("✅ ", "").replace("⬜️ ", "")
-    topic_id = context.user_data["topic_data"].get(topic_name)
-
-    if not topic_id:
-        await update.message.reply_text("❌ Topic not recognized.")
+    if "Morning" in choice:
+        pref = "morning"
+    elif "Evening" in choice:
+        pref = "evening"
+    else:
+        await update.message.reply_text("❌ Invalid selection.")
         return ConversationHandler.END
-
-    supabase.table("user_topics").upsert({
+    supabase.table("reminders").upsert({
         "telegram_id": user_id,
-        "topic_id": topic_id,
-        "completed": True
+        "time_pref": pref,
+        "enabled": True
     }).execute()
+    await update.message.reply_text(f"✅ Daily reminders set for *{pref.capitalize()}*!", parse_mode="Markdown")
+    return ConversationHandler.END
 
-    await update.message.reply_text(f"✅ Marked '{topic_name}' as complete!")
-    return await show_topics(update, context)
-
-# --- MAIN
+# --- main()
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    # Quiz Conversation
-    quiz_conv = ConversationHandler(
-        entry_points=[CommandHandler("quiz", quiz)],
-        states={"CHOOSE_SUBJECT": [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_subject)]},
-        fallbacks=[CommandHandler("cancel", lambda u, c: u.message.reply_text("❌ Cancelled."))],
-    )
-
-    # Syllabus Conversation
-    syllabus_conv = ConversationHandler(
-        entry_points=[CommandHandler("syllabus", syllabus)],
-        states={
-            "CHOOSE_SYLLABUS_SUBJECT": [MessageHandler(filters.TEXT & ~filters.COMMAND, show_topics)],
-            "MARK_TOPIC": [MessageHandler(filters.TEXT & ~filters.COMMAND, mark_topic_done)],
-        },
-        fallbacks=[CommandHandler("cancel", lambda u, c: u.message.reply_text("❌ Cancelled."))],
-    )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("leaderboard", leaderboard))
+    app.add_handler(CommandHandler("badges", my_badges))
+    app.add_handler(CommandHandler("exams", exams))
+
+    # Quiz flow
+    quiz_conv = ConversationHandler(
+        entry_points=[CommandHandler("quiz", quiz)],
+        states={"CHOOSE_SUBJECT": [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_subject)]},
+        fallbacks=[]
+    )
     app.add_handler(quiz_conv)
-    app.add_handler(syllabus_conv)
+
+    # Reminder setup
+    remind_conv = ConversationHandler(
+        entry_points=[CommandHandler("remindme", remindme)],
+        states={"SET_REMINDER_TIME": [MessageHandler(filters.TEXT & ~filters.COMMAND, save_reminder)]},
+        fallbacks=[]
+    )
+    app.add_handler(remind_conv)
+
+    # Answer handler
     app.add_handler(CallbackQueryHandler(handle_answer))
 
     app.run_polling()

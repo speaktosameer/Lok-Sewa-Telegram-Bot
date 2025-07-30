@@ -1,16 +1,16 @@
-# mcq_handler.py
-
-from supabase_client import supabase
 import random
+from supabase_client import supabase_get
 
-def get_random_mcq(subject):
-    response = supabase.table("mcqs").select("*").eq("subject", subject).execute()
-    data = response.data
-    if not data:
+# Fetch and return a random MCQ by subject
+def get_random_mcq(subject: str):
+    mcqs = supabase_get("mcqs")
+    subject_mcqs = [q for q in mcqs if q["subject"].lower() == subject.lower()]
+    if not subject_mcqs:
         return None
-    return random.choice(data)
+    return random.choice(subject_mcqs)
 
-def format_mcq(mcq):
+# Format the MCQ nicely for Telegram display
+def format_mcq(mcq: dict):
     return (
         f"📘 *{mcq['subject']}*\n\n"
         f"❓ *{mcq['question']}*\n\n"

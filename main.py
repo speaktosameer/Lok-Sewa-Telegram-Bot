@@ -17,7 +17,7 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler
 )
-from supabase_client import supabase
+from supabase_client import supabase_get, supabase_upsert, supabase_post
 from mcq_handler import get_random_mcq, format_mcq
 
 load_dotenv()
